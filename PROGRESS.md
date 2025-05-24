@@ -2,10 +2,10 @@
 
 ## Project Information
 
-- **Start Date**: [Add your start date]
-- **Target Launch**: [Add your target date]
+- **Start Date**: [25-05-2025]
+- **Target Launch**: [01-06-2025]
 - **Current Phase**: Planning & Setup
-- **Last Updated**: [Current Date]
+- **Last Updated**: [25-05-2025]
 
 ## Tech Stack Confirmed ✅
 
