@@ -1,4 +1,4 @@
-// app/auth/login/page.js
+// app/auth/login/page.js - Fixed with proper redirect handling
 "use client";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { auth } from "@/lib/firebase";
+import { useAuthStore } from "@/stores/authStore";
 import {
   GoogleAuthProvider,
   signInWithEmailAndPassword,
@@ -21,14 +22,28 @@ import {
 import { Chrome, Lock, Mail, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const router = useRouter();
+  const { user, isLoading: authLoading } = useAuthStore();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (mounted && !authLoading && user) {
+      console.log("🔄 User already logged in, redirecting to chat...");
+      router.push("/chat");
+    }
+  }, [mounted, authLoading, user, router]);
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();
@@ -36,11 +51,13 @@ export default function LoginPage() {
     setError("");
 
     try {
+      console.log("🔍 Attempting email login...");
       await signInWithEmailAndPassword(auth, email, password);
-      router.push("/chat");
+      console.log("✅ Email login successful");
+      // Don't manually redirect - let the auth state change handle it
     } catch (error) {
+      console.error("❌ Login error:", error);
       setError(getErrorMessage(error.code));
-    } finally {
       setIsLoading(false);
     }
   };
@@ -50,12 +67,14 @@ export default function LoginPage() {
     setError("");
 
     try {
+      console.log("🔍 Attempting Google login...");
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      router.push("/chat");
+      console.log("✅ Google login successful");
+      // Don't manually redirect - let the auth state change handle it
     } catch (error) {
+      console.error("❌ Google login error:", error);
       setError(getErrorMessage(error.code));
-    } finally {
       setIsLoading(false);
     }
   };
@@ -70,10 +89,38 @@ export default function LoginPage() {
         return "Please enter a valid email address.";
       case "auth/too-many-requests":
         return "Too many failed attempts. Please try again later.";
+      case "auth/popup-closed-by-user":
+        return "Login cancelled by user.";
       default:
         return "An error occurred. Please try again.";
     }
   };
+
+  // Don't render until mounted to prevent hydration issues
+  if (!mounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500"></div>
+      </div>
+    );
+  }
+
+  // Show loading if auth is still being checked
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center space-y-2">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500"></div>
+          <p className="text-sm text-gray-500">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't show login form if user is already logged in
+  if (user) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-accent-50 flex items-center justify-center p-4">
@@ -109,6 +156,7 @@ export default function LoginPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   className="pl-10"
                   required
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -125,6 +173,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-10"
                   required
+                  disabled={isLoading}
                 />
               </div>
             </div>
