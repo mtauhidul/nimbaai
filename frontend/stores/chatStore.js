@@ -1,4 +1,4 @@
-// stores/chatStore.js - Fixed with debug logging
+// stores/chatStore.js - Updated with token system
 import { create } from "zustand";
 
 // Simple store without persistence to avoid hydration issues
@@ -9,53 +9,59 @@ const useChatStore = create((set, get) => ({
   currentConversationId: null,
   isLoading: false,
   selectedModel: "gpt-3.5-turbo",
+
+  // Updated model configuration for token system
   availableModels: [
-    // Most cost-effective models first
+    // Most cost-effective models
     {
       id: "gpt-3.5-turbo",
       name: "GPT-3.5 Turbo",
-      cost: 1,
       provider: "openai",
       description: "Fast & affordable for most tasks",
+      estimatedCost: "~50-200 tokens", // Rough estimate for display
     },
     {
       id: "claude-3-haiku",
       name: "Claude 3 Haiku",
-      cost: 1,
       provider: "anthropic",
       description: "Lightning fast & cost-effective",
+      estimatedCost: "~40-150 tokens",
     },
-    // Best value advanced models
+    // Advanced models
     {
       id: "gpt-4-turbo",
       name: "GPT-4 Turbo",
-      cost: 3,
       provider: "openai",
       description: "Latest GPT-4 with improved performance",
+      estimatedCost: "~100-500 tokens",
     },
     {
       id: "claude-3-sonnet",
       name: "Claude 3.5 Sonnet",
-      cost: 3,
       provider: "anthropic",
       description: "Most advanced reasoning & coding",
+      estimatedCost: "~80-400 tokens",
     },
-    // Premium models for complex tasks
+    // Premium models
     {
       id: "gpt-4",
       name: "GPT-4",
-      cost: 5,
       provider: "openai",
       description: "Most capable OpenAI model",
+      estimatedCost: "~200-800 tokens",
     },
     {
       id: "claude-3-opus",
       name: "Claude 3 Opus",
-      cost: 5,
       provider: "anthropic",
       description: "Most intelligent Claude model",
+      estimatedCost: "~150-600 tokens",
     },
   ],
+
+  // Token-related state
+  lastTokenUsage: null,
+  totalTokensUsedInSession: 0,
 
   // Actions with debug logging
   addMessage: (message) => {
@@ -64,6 +70,7 @@ const useChatStore = create((set, get) => ({
     set((state) => {
       const newMessage = {
         id: message.id || `msg-${Date.now()}-${Math.random()}`,
+        timestamp: message.timestamp || new Date().toISOString(),
         ...message,
       };
 
@@ -86,8 +93,50 @@ const useChatStore = create((set, get) => ({
         currentState.messages.length,
         "messages"
       );
-      console.log("🏪 All messages:", currentState.messages);
     }, 0);
+  },
+
+  // Add multiple messages (for user + AI response pair)
+  addMessages: (messages) => {
+    console.log(
+      "🏪 Store addMessages called with:",
+      messages.length,
+      "messages"
+    );
+
+    set((state) => {
+      const newMessages = messages.map((msg) => ({
+        id: msg.id || `msg-${Date.now()}-${Math.random()}`,
+        timestamp: msg.timestamp || new Date().toISOString(),
+        ...msg,
+      }));
+
+      return {
+        messages: [...state.messages, ...newMessages],
+      };
+    });
+  },
+
+  // Update message with token usage info
+  updateMessageWithTokens: (messageId, tokenUsage) => {
+    console.log("🏪 Store updateMessageWithTokens:", messageId, tokenUsage);
+
+    set((state) => ({
+      messages: state.messages.map((msg) =>
+        msg.id === messageId
+          ? {
+              ...msg,
+              tokenUsage,
+              inputTokens: tokenUsage?.input_tokens,
+              outputTokens: tokenUsage?.output_tokens,
+              totalTokens: tokenUsage?.total_tokens,
+            }
+          : msg
+      ),
+      lastTokenUsage: tokenUsage,
+      totalTokensUsedInSession:
+        state.totalTokensUsedInSession + (tokenUsage?.total_tokens || 0),
+    }));
   },
 
   setMessages: (messages) => {
@@ -101,7 +150,10 @@ const useChatStore = create((set, get) => ({
 
   clearMessages: () => {
     console.log("🏪 Store clearMessages called");
-    set({ messages: [] });
+    set({
+      messages: [],
+      lastTokenUsage: null,
+    });
   },
 
   setLoading: (isLoading) => {
@@ -114,7 +166,7 @@ const useChatStore = create((set, get) => ({
     set({ selectedModel: model });
   },
 
-  // Conversation management
+  // Conversation management - Enhanced
   setConversations: (conversations) => set({ conversations }),
 
   addConversation: (conversation) =>
@@ -126,30 +178,20 @@ const useChatStore = create((set, get) => ({
     console.log("🏪 Store setCurrentConversation:", conversationId);
     set({
       currentConversationId: conversationId,
-      // DON'T clear messages when switching conversations for now
-      // messages: [],
+      lastTokenUsage: null, // Reset token usage when switching conversations
     });
   },
 
   createNewConversation: () => {
-    const newConversation = {
-      id: `temp-${Date.now()}`,
-      title: "New Chat",
-      messageCount: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    console.log("🏪 Store createNewConversation - clearing current state");
 
-    console.log("🏪 Store createNewConversation:", newConversation.id);
+    set({
+      currentConversationId: null,
+      messages: [], // Clear messages for new conversation
+      lastTokenUsage: null,
+    });
 
-    set((state) => ({
-      conversations: [newConversation, ...state.conversations],
-      currentConversationId: newConversation.id,
-      // DON'T clear messages for now
-      // messages: [],
-    }));
-
-    return newConversation.id;
+    return null; // No temp ID needed, conversation created on first message
   },
 
   updateConversation: (conversationId, updates) =>
@@ -167,7 +209,7 @@ const useChatStore = create((set, get) => ({
 
       const newCurrentId =
         state.currentConversationId === conversationId
-          ? newConversations[0]?.id || null
+          ? null // Clear current conversation if it was deleted
           : state.currentConversationId;
 
       return {
@@ -175,21 +217,158 @@ const useChatStore = create((set, get) => ({
         currentConversationId: newCurrentId,
         messages:
           newCurrentId === state.currentConversationId ? state.messages : [],
+        lastTokenUsage:
+          newCurrentId === state.currentConversationId
+            ? state.lastTokenUsage
+            : null,
       };
     }),
 
-  // Utility methods
+  // Enhanced utility methods for token system
   getCurrentModel: () => {
     const state = get();
     return state.availableModels.find((m) => m.id === state.selectedModel);
   },
 
-  canSendMessage: (userCredits) => {
+  // Updated to check token balance instead of credits
+  canSendMessage: (userTokens) => {
     const state = get();
-    const currentModel = state.availableModels.find(
-      (m) => m.id === state.selectedModel
+    const minimumTokens = 100; // Minimum tokens needed to send a message
+    return userTokens >= minimumTokens && !state.isLoading;
+  },
+
+  // Estimate tokens needed for a message
+  estimateTokensForMessage: (message) => {
+    // Very rough estimate: 1 token per 4 characters + buffer for response
+    const inputEstimate = Math.ceil(message.length / 4);
+    const outputEstimate = 100; // Minimum expected response
+    return inputEstimate + outputEstimate;
+  },
+
+  // Get token usage statistics for current session
+  getSessionStats: () => {
+    const state = get();
+    const messagesWithTokens = state.messages.filter(
+      (msg) => msg.totalTokens > 0
     );
-    return userCredits >= (currentModel?.cost || 1) && !state.isLoading;
+
+    return {
+      totalTokensUsed: state.totalTokensUsedInSession,
+      messagesWithTokens: messagesWithTokens.length,
+      averageTokensPerMessage:
+        messagesWithTokens.length > 0
+          ? Math.round(
+              state.totalTokensUsedInSession / messagesWithTokens.length
+            )
+          : 0,
+      lastTokenUsage: state.lastTokenUsage,
+    };
+  },
+
+  // Send message with token tracking
+  sendMessage: async (message, authStore) => {
+    const state = get();
+    const { user, tokens, deductTokens } = authStore;
+
+    if (!user) {
+      throw new Error("Not authenticated");
+    }
+
+    if (!state.canSendMessage(tokens)) {
+      throw new Error("Insufficient tokens to send message");
+    }
+
+    console.log("🚀 Sending message with token tracking...");
+
+    // Set loading state
+    set({ isLoading: true });
+
+    try {
+      // Get auth token
+      const authToken = await user.getIdToken();
+
+      // Send request to backend
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/chat/message`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message,
+            model: state.selectedModel,
+            conversationId: state.currentConversationId,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to send message");
+      }
+
+      const data = await response.json();
+
+      console.log("✅ Message sent successfully:", data);
+
+      // Add both user and AI messages to store
+      const userMessage = {
+        id: data.userMessage.id,
+        role: "user",
+        content: message,
+        timestamp: data.userMessage.timestamp,
+      };
+
+      const aiMessage = {
+        id: data.aiMessage.id,
+        role: "assistant",
+        content: data.aiMessage.content,
+        timestamp: data.aiMessage.timestamp,
+        model: data.aiMessage.model,
+        tokenUsage: data.tokenUsage,
+        inputTokens: data.tokenUsage?.input_tokens || 0,
+        outputTokens: data.tokenUsage?.output_tokens || 0,
+        totalTokens: data.tokenUsage?.total_tokens || 0,
+        isError: data.isError,
+      };
+
+      // Add messages to store
+      get().addMessages([userMessage, aiMessage]);
+
+      // Update conversation ID if new
+      if (
+        data.conversationId &&
+        data.conversationId !== state.currentConversationId
+      ) {
+        set({ currentConversationId: data.conversationId });
+      }
+
+      // Update token usage stats
+      set((prevState) => ({
+        lastTokenUsage: data.tokenUsage,
+        totalTokensUsedInSession:
+          prevState.totalTokensUsedInSession + (data.tokensUsed || 0),
+      }));
+
+      // Update auth store with new token balance
+      if (data.tokensUsed > 0) {
+        deductTokens(data.tokensUsed);
+      }
+
+      return {
+        success: true,
+        tokensUsed: data.tokensUsed,
+        remainingTokens: data.remainingTokens,
+        conversationId: data.conversationId,
+      };
+    } catch (error) {
+      console.error("❌ Failed to send message:", error);
+      throw error;
+    } finally {
+      set({ isLoading: false });
+    }
   },
 
   // Debug method
@@ -201,6 +380,8 @@ const useChatStore = create((set, get) => ({
       isLoading: state.isLoading,
       selectedModel: state.selectedModel,
       currentConversationId: state.currentConversationId,
+      lastTokenUsage: state.lastTokenUsage,
+      totalTokensUsedInSession: state.totalTokensUsedInSession,
     });
   },
 
@@ -213,6 +394,8 @@ const useChatStore = create((set, get) => ({
       currentConversationId: null,
       isLoading: false,
       selectedModel: "gpt-3.5-turbo",
+      lastTokenUsage: null,
+      totalTokensUsedInSession: 0,
     });
   },
 }));

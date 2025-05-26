@@ -1,4 +1,4 @@
-// frontend/lib/api.js
+// frontend/lib/api.js - Updated with token endpoints
 class ApiClient {
   constructor() {
     this.baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -45,6 +45,17 @@ class ApiClient {
     return this.request("/api/auth/verify");
   }
 
+  // NEW: Token system endpoints
+  async checkEmailVerification() {
+    return this.request("/api/auth/check-email-verification", {
+      method: "POST",
+    });
+  }
+
+  async getTokenBalance() {
+    return this.request("/api/auth/token-balance");
+  }
+
   // Chat endpoints
   async sendMessage(conversationId, message, model = "gpt-3.5-turbo") {
     return this.request("/api/chat/message", {
@@ -59,6 +70,10 @@ class ApiClient {
 
   async getConversations() {
     return this.request("/api/chat/conversations");
+  }
+
+  async getConversationMessages(conversationId) {
+    return this.request(`/api/chat/conversations/${conversationId}/messages`);
   }
 
   async createConversation(title = "New Chat") {
