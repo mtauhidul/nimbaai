@@ -357,8 +357,8 @@
 
 ### Production URLs
 
-- **Frontend (Vercel)**: https://your-vercel-url.vercel.app
-- **Backend (Heroku)**: https://your-heroku-app.herokuapp.com
+- **Frontend (Vercel)**: https://nimbaai.vercel.app
+- **Backend (Heroku)**: https://nimbaai-backend-94bd3effd14c.herokuapp.com
 - **GitHub Repo**: https://github.com/mtauhidul/nimbaai
 
 ### API Keys Status
