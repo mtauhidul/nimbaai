@@ -1,4 +1,4 @@
-// frontend/lib/api.js - Updated with token endpoints
+// frontend/lib/api.js - Enhanced with dual currency token purchase (keeping all existing code)
 class ApiClient {
   constructor() {
     this.baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -45,7 +45,7 @@ class ApiClient {
     return this.request("/api/auth/verify");
   }
 
-  // NEW: Token system endpoints
+  // Token system endpoints
   async checkEmailVerification() {
     return this.request("/api/auth/check-email-verification", {
       method: "POST",
@@ -89,7 +89,7 @@ class ApiClient {
     });
   }
 
-  // Billing endpoints
+  // EXISTING Billing endpoints (keeping all original functionality)
   async getUserCredits() {
     return this.request("/api/billing/credits");
   }
@@ -103,6 +103,32 @@ class ApiClient {
 
   async getPaymentHistory() {
     return this.request("/api/billing/history");
+  }
+
+  // NEW: Simple Dual Currency Token Purchase Methods (additions - won't break existing code)
+
+  // Calculate custom token price
+  async calculateTokenPrice(tokens, currency = "USD") {
+    return this.request(
+      `/api/billing/calculate-price?tokens=${tokens}&currency=${currency}`
+    );
+  }
+
+  // Purchase tokens (mock payment)
+  async purchaseTokens(tokens, currency = "USD", paymentMethod = "mock") {
+    return this.request("/api/billing/purchase-tokens", {
+      method: "POST",
+      body: JSON.stringify({
+        tokens,
+        currency,
+        paymentMethod,
+      }),
+    });
+  }
+
+  // Get purchase history
+  async getPurchaseHistory(limit = 20) {
+    return this.request(`/api/billing/purchase-history?limit=${limit}`);
   }
 }
 
