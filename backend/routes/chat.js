@@ -1,4 +1,4 @@
-// backend/routes/chat.js - Fixed Firebase FieldValue imports
+// backend/routes/chat.js - Updated with real token system
 const express = require("express");
 const { authenticateUser } = require("../middleware/auth");
 const { generateResponse: openaiResponse } = require("../services/openai");
@@ -6,53 +6,55 @@ const {
   generateResponse: anthropicResponse,
 } = require("../services/anthropic");
 const { db } = require("../services/firebase-admin");
-const { FieldValue } = require("firebase-admin/firestore"); // Add this import
+const { FieldValue } = require("firebase-admin/firestore");
 
 const router = express.Router();
 
-// Model configuration with real AI providers
+// Model configuration with token-based pricing
 const MODEL_CONFIG = {
-  // Cost-effective models (1 credit)
+  // Cost-effective models
   "gpt-3.5-turbo": {
     provider: "openai",
-    cost: 1,
     model: "gpt-3.5-turbo",
     name: "GPT-3.5 Turbo",
   },
   "claude-3-haiku": {
     provider: "anthropic",
-    cost: 1,
     model: "claude-3-haiku-20240307",
     name: "Claude 3 Haiku",
   },
 
-  // Best value advanced models (3 credits)
+  // Advanced models
   "gpt-4-turbo": {
     provider: "openai",
-    cost: 3,
-    model: "gpt-4-turbo-preview", // Latest GPT-4 Turbo
+    model: "gpt-4-turbo-preview",
     name: "GPT-4 Turbo",
   },
   "claude-3-sonnet": {
     provider: "anthropic",
-    cost: 3,
-    model: "claude-3-5-sonnet-20241022", // Latest Claude 3.5 Sonnet
+    model: "claude-3-5-sonnet-20241022",
     name: "Claude 3.5 Sonnet",
   },
 
-  // Premium models (5 credits)
+  // Premium models
   "gpt-4": {
     provider: "openai",
-    cost: 5,
-    model: "gpt-4", // Standard GPT-4
+    model: "gpt-4",
     name: "GPT-4",
   },
   "claude-3-opus": {
     provider: "anthropic",
-    cost: 5,
     model: "claude-3-opus-20240229",
     name: "Claude 3 Opus",
   },
+};
+
+// Estimate minimum tokens needed for a message (rough estimate)
+const estimateTokensNeeded = (message) => {
+  // Very rough estimate: 1 token per 4 characters + 100 tokens buffer for response
+  const inputEstimate = Math.ceil(message.length / 4);
+  const outputEstimate = 100; // Minimum expected response
+  return inputEstimate + outputEstimate;
 };
 
 // Health check endpoint
@@ -60,7 +62,7 @@ router.get("/health", (req, res) => {
   res.json({ status: "OK", message: "Chat API is running" });
 });
 
-// Send message endpoint with real AI
+// Send message endpoint with real token system
 router.post("/message", authenticateUser, async (req, res) => {
   try {
     const { message, model = "gpt-3.5-turbo", conversationId } = req.body;
@@ -80,7 +82,7 @@ router.post("/message", authenticateUser, async (req, res) => {
       return res.status(400).json({ error: "Invalid model selected" });
     }
 
-    // Get user data and check credits
+    // Get user data and check token balance
     const userDoc = await db.collection("users").doc(userId).get();
     const userData = userDoc.data();
 
@@ -89,16 +91,19 @@ router.post("/message", authenticateUser, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const userCredits = userData.credits || 0;
+    const userTokens = userData.tokens || 0;
+    const estimatedTokens = estimateTokensNeeded(message);
+
     console.log(
-      `💰 User has ${userCredits} credits, needs ${modelConfig.cost}`
+      `🪙 User has ${userTokens} tokens, estimated need: ${estimatedTokens}`
     );
 
-    if (userCredits < modelConfig.cost) {
+    // Check if user has sufficient tokens (rough estimate)
+    if (userTokens < estimatedTokens) {
       return res.status(400).json({
-        error: "Insufficient credits",
-        required: modelConfig.cost,
-        available: userCredits,
+        error: "Insufficient tokens",
+        estimated: estimatedTokens,
+        available: userTokens,
       });
     }
 
@@ -146,20 +151,19 @@ router.post("/message", authenticateUser, async (req, res) => {
       content: message,
     });
 
-    // Generate AI response
+    // Generate AI response and capture real token usage
     let aiResponse;
+    let tokenUsage = null;
     let aiError = null;
 
     try {
       console.log(`🚀 Calling ${modelConfig.provider} API...`);
 
+      let result;
       if (modelConfig.provider === "openai") {
-        aiResponse = await openaiResponse(
-          conversationHistory,
-          modelConfig.model
-        );
+        result = await openaiResponse(conversationHistory, modelConfig.model);
       } else if (modelConfig.provider === "anthropic") {
-        aiResponse = await anthropicResponse(
+        result = await anthropicResponse(
           conversationHistory,
           modelConfig.model
         );
@@ -167,7 +171,11 @@ router.post("/message", authenticateUser, async (req, res) => {
         throw new Error("Unknown AI provider");
       }
 
+      aiResponse = result.content;
+      tokenUsage = result.tokenUsage;
+
       console.log(`✅ AI response generated (${aiResponse.length} characters)`);
+      console.log(`🪙 Real token usage:`, tokenUsage);
     } catch (error) {
       console.error(`❌ ${modelConfig.provider} API Error:`, error);
       aiError = error;
@@ -214,7 +222,7 @@ router.post("/message", authenticateUser, async (req, res) => {
       conversationId: finalConversationId,
     });
 
-    // Save AI message
+    // Save AI message with token usage
     const aiMessageRef = db
       .collection("conversations")
       .doc(finalConversationId)
@@ -229,29 +237,51 @@ router.post("/message", authenticateUser, async (req, res) => {
       conversationId: finalConversationId,
       model: model,
       error: aiError ? aiError.message : null,
+      // Store real token usage data
+      tokenUsage: tokenUsage || null,
+      inputTokens: tokenUsage?.input_tokens || 0,
+      outputTokens: tokenUsage?.output_tokens || 0,
+      totalTokens: tokenUsage?.total_tokens || 0,
     });
 
-    // Update conversation metadata - FIXED: Use proper FieldValue import
+    // Update conversation metadata
     await db
       .collection("conversations")
       .doc(finalConversationId)
       .update({
         updatedAt: new Date(),
-        messageCount: FieldValue.increment(2), // Fixed: Use imported FieldValue
+        messageCount: FieldValue.increment(2),
       });
 
-    // Deduct credits from user only if AI call was successful - FIXED
-    if (!aiError) {
+    // Deduct REAL tokens from user only if AI call was successful
+    let tokensUsed = 0;
+    if (!aiError && tokenUsage) {
+      tokensUsed = tokenUsage.total_tokens;
+
+      // Deduct actual tokens used
       await db
         .collection("users")
         .doc(userId)
         .update({
-          credits: FieldValue.increment(-modelConfig.cost), // Fixed: Use imported FieldValue
+          tokens: FieldValue.increment(-tokensUsed),
         });
-      console.log(`💰 Deducted ${modelConfig.cost} credits from user`);
+
+      // Record token usage for analytics
+      await db.collection("tokenUsage").add({
+        userId,
+        conversationId: finalConversationId,
+        messageId: aiMessageRef.id,
+        model,
+        inputTokens: tokenUsage.input_tokens,
+        outputTokens: tokenUsage.output_tokens,
+        totalTokens: tokenUsage.total_tokens,
+        timestamp: new Date(),
+      });
+
+      console.log(`🪙 Deducted ${tokensUsed} tokens from user`);
     }
 
-    // Return response
+    // Return response with real token data
     const response = {
       success: true,
       conversationId: finalConversationId,
@@ -268,14 +298,15 @@ router.post("/message", authenticateUser, async (req, res) => {
         timestamp: new Date().toISOString(),
         model: model,
       },
-      creditsUsed: aiError ? 0 : modelConfig.cost,
-      remainingCredits: aiError ? userCredits : userCredits - modelConfig.cost,
+      tokensUsed: tokensUsed,
+      remainingTokens: aiError ? userTokens : userTokens - tokensUsed,
+      tokenUsage: tokenUsage,
       aiProvider: modelConfig.provider,
       isError: !!aiError,
     };
 
     console.log(
-      `✅ Message processed successfully. Credits used: ${response.creditsUsed}`
+      `✅ Message processed successfully. Tokens used: ${tokensUsed}`
     );
     res.json(response);
   } catch (error) {
@@ -288,7 +319,7 @@ router.post("/message", authenticateUser, async (req, res) => {
   }
 });
 
-// Get conversations
+// Get conversations (unchanged)
 router.get("/conversations", authenticateUser, async (req, res) => {
   try {
     const userId = req.user.uid;
@@ -314,7 +345,7 @@ router.get("/conversations", authenticateUser, async (req, res) => {
   }
 });
 
-// Get conversation messages
+// Get conversation messages (unchanged)
 router.get(
   "/conversations/:conversationId/messages",
   authenticateUser,

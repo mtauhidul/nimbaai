@@ -1,4 +1,4 @@
-// backend/services/anthropic.js
+// backend/services/anthropic.js - Updated with token tracking
 const Anthropic = require("@anthropic-ai/sdk");
 
 const anthropic = new Anthropic({
@@ -21,7 +21,20 @@ const generateResponse = async (
       messages: userMessages,
     });
 
-    return response.content[0].text;
+    // Extract token usage from Anthropic response
+    const tokenUsage = {
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+    };
+
+    console.log(`🔢 Anthropic Token Usage:`, tokenUsage);
+
+    // Return both response and token usage
+    return {
+      content: response.content[0].text,
+      tokenUsage,
+    };
   } catch (error) {
     console.error("Anthropic API Error:", error);
     throw new Error("Failed to generate response");
