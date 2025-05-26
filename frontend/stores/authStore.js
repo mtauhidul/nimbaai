@@ -96,7 +96,7 @@ const useAuthStore = create((set, get) => ({
       canChat: false,
       tokenUsageStats: null,
       // NEW: Reset currency state
-      preferredCurrency: "USD",
+      preferredCurrency: DEFAULT_CURRENCY,
       purchaseHistory: [],
       tokenStats: null,
       lastPurchase: null,
