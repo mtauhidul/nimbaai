@@ -1,4 +1,4 @@
-// components/chat/ChatInterface.js - Debug Model Selection
+// components/chat/ChatInterface.js - Updated with token system
 "use client";
 
 import ClientOnly from "@/components/ClientOnly";
@@ -35,7 +35,10 @@ function ChatInterfaceContent() {
     setLoading,
   } = useChatStore();
 
-  const { credits, user, updateUserCredits } = useAuthStore();
+  // Updated to use token system
+  const { tokens, credits, user, canChat, updateUserTokens, deductTokens } =
+    useAuthStore();
+
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -54,13 +57,28 @@ function ChatInterfaceContent() {
 
   // Get current model configuration
   const currentModel = availableModels.find((m) => m.id === selectedModel);
-  const canSendMessage =
-    message.trim() && !isLoading && credits >= (currentModel?.cost || 1);
 
-  // Debug current model
+  // Updated logic for token system
+  const displayBalance = tokens || (credits > 0 ? credits * 1000 : 0);
+  const isUsingTokens = tokens > 0 || credits === 0;
+  const minimumTokensNeeded = 100;
+
+  const canSendMessage =
+    message.trim() &&
+    !isLoading &&
+    (isUsingTokens
+      ? tokens >= minimumTokensNeeded
+      : credits >= (currentModel?.cost || 1));
+
+  // Debug current model and balance
   console.log("🔍 Current Model Object:", currentModel);
   console.log("🔍 Current Model ID:", selectedModel);
-  console.log("🔍 Current Credits:", credits);
+  console.log("🔍 Current Balance:", {
+    tokens,
+    credits,
+    displayBalance,
+    isUsingTokens,
+  });
 
   const handleSendMessage = async () => {
     if (!canSendMessage) return;
@@ -73,9 +91,11 @@ function ChatInterfaceContent() {
     // Debug: Log exactly what we're sending
     console.log("🚀 SENDING TO BACKEND:", {
       message: userMessageContent,
-      model: selectedModel, // This should match what user selected
+      model: selectedModel,
       conversationId: currentConversationId,
       currentModelObject: currentModel,
+      tokenBalance: tokens,
+      creditBalance: credits,
     });
 
     // Add user message to UI immediately
@@ -88,19 +108,21 @@ function ChatInterfaceContent() {
 
     addMessage(tempUserMessage);
 
-    // Show loading toast with correct model name
+    // Show loading toast with model name
     const loadingToast = toast.loading(`${currentModel?.name} is thinking...`, {
-      description: `Using ${currentModel?.cost} credit${
-        currentModel?.cost > 1 ? "s" : ""
-      } - Model: ${selectedModel}`,
+      description: isUsingTokens
+        ? `Using tokens - Model: ${selectedModel}`
+        : `Using ${currentModel?.cost} credit${
+            currentModel?.cost > 1 ? "s" : ""
+          } - Model: ${selectedModel}`,
     });
 
     try {
-      // Send to real backend - Make sure we're sending the right model
+      // Send to backend
       const response = await apiClient.sendMessage(
         currentConversationId,
         userMessageContent,
-        selectedModel // This should be exactly what user selected
+        selectedModel
       );
 
       console.log("✅ Backend Response Model:", response.aiMessage?.model);
@@ -118,18 +140,39 @@ function ChatInterfaceContent() {
           content: response.aiMessage.content,
           timestamp: response.aiMessage.timestamp,
           model: response.aiMessage.model,
+          // Add token usage data if available
+          tokenUsage: response.tokenUsage,
+          tokensUsed: response.tokensUsed,
         };
 
         // Add AI response to UI
         addMessage(aiMessage);
 
-        // Update credits - Use the response credits, not the local calculation
-        console.log("💰 Credits before:", credits);
-        console.log(
-          "💰 Credits after (from backend):",
-          response.remainingCredits
-        );
-        updateUserCredits(response.remainingCredits);
+        // Update balance based on response
+        if (response.tokensUsed && response.remainingTokens !== undefined) {
+          // Token system response
+          console.log("🪙 Tokens before:", tokens);
+          console.log("🪙 Tokens used:", response.tokensUsed);
+          console.log("🪙 Remaining tokens:", response.remainingTokens);
+
+          updateUserTokens(response.remainingTokens);
+        } else if (
+          response.creditsUsed &&
+          response.remainingCredits !== undefined
+        ) {
+          // Legacy credit system response
+          console.log("💰 Credits before:", credits);
+          console.log("💰 Credits used:", response.creditsUsed);
+          console.log("💰 Remaining credits:", response.remainingCredits);
+
+          // Use legacy method if it exists, otherwise update tokens
+          if (typeof updateUserCredits === "function") {
+            updateUserCredits(response.remainingCredits);
+          } else {
+            // Convert credits to tokens for display
+            updateUserTokens(response.remainingCredits * 1000);
+          }
+        }
 
         // Update conversation ID if it's a new conversation
         if (response.conversationId && !currentConversationId) {
@@ -141,13 +184,22 @@ function ChatInterfaceContent() {
         // Show success toast
         if (response.isError) {
           toast.warning("AI Response Generated", {
-            description: `${response.aiProvider} had issues, but responded. No credits charged.`,
+            description: `${response.aiProvider} had issues, but responded. No charges applied.`,
           });
         } else {
+          const usageInfo = response.tokensUsed
+            ? `${response.tokensUsed} tokens`
+            : `${response.creditsUsed} credit${
+                response.creditsUsed > 1 ? "s" : ""
+              }`;
+
+          const remainingInfo =
+            response.remainingTokens !== undefined
+              ? `${response.remainingTokens} tokens remaining`
+              : `${response.remainingCredits} credits remaining`;
+
           toast.success(`${currentModel?.name} responded!`, {
-            description: `Used ${response.creditsUsed} credit${
-              response.creditsUsed > 1 ? "s" : ""
-            }. ${response.remainingCredits} remaining.`,
+            description: `Used ${usageInfo}. ${remainingInfo}`,
           });
         }
       } else {
@@ -182,16 +234,20 @@ function ChatInterfaceContent() {
     const newModelConfig = availableModels.find((m) => m.id === newModel);
     console.log("🔄 New Model Config:", newModelConfig);
 
+    const costInfo = isUsingTokens
+      ? `Estimated: ${newModelConfig?.estimatedCost || "~100-500 tokens"}`
+      : `Cost: ${newModelConfig?.cost} credit${
+          newModelConfig?.cost > 1 ? "s" : ""
+        } per message`;
+
     toast.info(`Switched to ${newModelConfig?.name}`, {
-      description: `Cost: ${newModelConfig?.cost} credit${
-        newModelConfig?.cost > 1 ? "s" : ""
-      } per message`,
+      description: costInfo,
     });
   };
 
   return (
     <div className="flex flex-col h-full">
-      {/* Model Selector */}
+      {/* Model Selector - Updated for token system */}
       <div className="border-b p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
@@ -205,7 +261,9 @@ function ChatInterfaceContent() {
                     <div className="flex items-center justify-between w-full">
                       <span>{model.name}</span>
                       <span className="text-xs text-gray-500 ml-2">
-                        {model.cost} credit{model.cost > 1 ? "s" : ""}
+                        {isUsingTokens
+                          ? model.estimatedCost || "~tokens"
+                          : `${model.cost} credit${model.cost > 1 ? "s" : ""}`}
                       </span>
                     </div>
                   </SelectItem>
@@ -215,22 +273,39 @@ function ChatInterfaceContent() {
 
             {currentModel && (
               <div className="text-xs text-gray-500">
-                Cost: {currentModel.cost} credit
-                {currentModel.cost > 1 ? "s" : ""} per message
+                {isUsingTokens
+                  ? `Estimated: ${
+                      currentModel.estimatedCost || "~100-500 tokens"
+                    }`
+                  : `Cost: ${currentModel.cost} credit${
+                      currentModel.cost > 1 ? "s" : ""
+                    } per message`}
               </div>
             )}
 
-            {/* Debug info */}
+            {/* Debug info - remove in production */}
             <div className="text-xs text-red-500">
-              Selected: {selectedModel} | Cost: {currentModel?.cost}
+              Selected: {selectedModel} | Balance: {displayBalance}{" "}
+              {isUsingTokens ? "tokens" : "credits"}
             </div>
           </div>
 
-          {/* Single credits display */}
+          {/* Balance display */}
           <div className="text-sm text-gray-500">
-            Credits: {credits || 0}
-            {currentModel && credits < currentModel.cost && (
-              <span className="text-red-500 ml-2">(Insufficient)</span>
+            {isUsingTokens ? (
+              <>
+                Tokens: {tokens?.toLocaleString() || 0}
+                {tokens < minimumTokensNeeded && (
+                  <span className="text-red-500 ml-2">(Insufficient)</span>
+                )}
+              </>
+            ) : (
+              <>
+                Credits: {credits || 0}
+                {currentModel && credits < currentModel.cost && (
+                  <span className="text-red-500 ml-2">(Insufficient)</span>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -250,7 +325,8 @@ function ChatInterfaceContent() {
           {/* Debug: Show message count */}
           <div className="text-xs text-gray-400 text-center">
             Messages in store: {messages.length} | Selected Model:{" "}
-            {selectedModel}
+            {selectedModel} | Balance: {displayBalance}{" "}
+            {isUsingTokens ? "tokens" : "credits"}
           </div>
 
           {messages.length === 0 ? (
@@ -265,8 +341,12 @@ function ChatInterfaceContent() {
                     <span className="font-medium">{currentModel.name}</span>
                   </p>
                   <p className="text-xs">
-                    {currentModel.cost} credit{currentModel.cost > 1 ? "s" : ""}{" "}
-                    per message
+                    {isUsingTokens
+                      ? currentModel.estimatedCost ||
+                        "~100-500 tokens per message"
+                      : `${currentModel.cost} credit${
+                          currentModel.cost > 1 ? "s" : ""
+                        } per message`}
                   </p>
                   <p className="text-xs text-red-500">
                     Model ID: {selectedModel}
@@ -307,6 +387,12 @@ function ChatInterfaceContent() {
                             ?.name || msg.model}
                           <br />
                           Model ID: {msg.model}
+                          {msg.tokensUsed && (
+                            <>
+                              <br />
+                              Tokens Used: {msg.tokensUsed.toLocaleString()}
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -354,7 +440,7 @@ function ChatInterfaceContent() {
         </div>
       </ScrollArea>
 
-      {/* Input Area */}
+      {/* Input Area - Updated for token system */}
       <div className="border-t p-4">
         <div className="max-w-3xl mx-auto">
           <div className="flex space-x-2">
@@ -363,14 +449,20 @@ function ChatInterfaceContent() {
               onChange={(e) => setMessage(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder={
-                credits <= 0
-                  ? "No credits remaining. Please purchase more to continue."
-                  : `Ask ${currentModel?.name} anything... (${
-                      currentModel?.cost || 1
-                    } credit${(currentModel?.cost || 1) > 1 ? "s" : ""})`
+                !canChat
+                  ? isUsingTokens
+                    ? "Insufficient tokens. Please get more tokens to continue."
+                    : "No credits remaining. Please purchase more to continue."
+                  : `Ask ${currentModel?.name} anything...${
+                      isUsingTokens
+                        ? ` (${currentModel?.estimatedCost || "~tokens"})`
+                        : ` (${currentModel?.cost || 1} credit${
+                            (currentModel?.cost || 1) > 1 ? "s" : ""
+                          })`
+                    }`
               }
               className="flex-1 min-h-[60px] max-h-32"
-              disabled={isLoading || credits <= 0}
+              disabled={isLoading || !canChat}
             />
             <Button
               onClick={handleSendMessage}
@@ -385,20 +477,31 @@ function ChatInterfaceContent() {
             </Button>
           </div>
 
-          {/* Status messages */}
-          {credits <= 0 && (
+          {/* Status messages - Updated for token system */}
+          {!canChat && (
             <p className="text-sm text-red-500 mt-2">
-              You have no credits left. Please purchase more to continue
-              chatting.
+              {isUsingTokens
+                ? "You don't have enough tokens. Please get more tokens to continue chatting."
+                : "You have no credits left. Please purchase more to continue chatting."}
             </p>
           )}
 
-          {currentModel && credits > 0 && credits < currentModel.cost && (
+          {isUsingTokens && tokens > 0 && tokens < minimumTokensNeeded && (
             <p className="text-sm text-orange-500 mt-2">
-              Insufficient credits for {currentModel.name}. Need{" "}
-              {currentModel.cost} credits, you have {credits}.
+              Low token balance. You have {tokens.toLocaleString()} tokens, need
+              at least {minimumTokensNeeded} to chat.
             </p>
           )}
+
+          {!isUsingTokens &&
+            currentModel &&
+            credits > 0 &&
+            credits < currentModel.cost && (
+              <p className="text-sm text-orange-500 mt-2">
+                Insufficient credits for {currentModel.name}. Need{" "}
+                {currentModel.cost} credits, you have {credits}.
+              </p>
+            )}
 
           {isLoading && (
             <p className="text-sm text-blue-500 mt-2">
